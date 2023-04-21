@@ -96,7 +96,7 @@ func (payload *Payload) update(block *types.Block, fees *big.Int, elapsed time.D
 	// Ensure the newly provided full block has a higher transaction fee.
 	// In post-merge stage, there is no uncle reward anymore and transaction
 	// fee(apart from the mev revenue) is the only indicator for comparison.
-	if payload.full == nil || fees.Cmp(payload.fullFees) > 0 {
+	if payload.full == nil || fees.Cmp(payload.fullFees) > 0 { // daewoo: 非空块填充
 		payload.full = block
 		payload.fullFees = fees
 
@@ -156,12 +156,12 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 	// Build the initial version with no transaction included. It should be fast
 	// enough to run. The empty payload can at least make sure there is something
 	// to deliver for not missing slot.
-	empty, _, err := w.getSealingBlock(args.Parent, args.Timestamp, args.FeeRecipient, args.Random, args.Withdrawals, true)
+	empty, _, err := w.getSealingBlock(args.Parent, args.Timestamp, args.FeeRecipient, args.Random, args.Withdrawals, true) // daewoo: noTxs=true, 构建空块
 	if err != nil {
 		return nil, err
 	}
 	// Construct a payload object for return.
-	payload := newPayload(empty, args.Id())
+	payload := newPayload(empty, args.Id()) // daewoo: 先生成一个空块，并在12s内进行更新
 
 	// Spin up a routine for updating the payload in background. This strategy
 	// can maximum the revenue for including transactions with highest fee.
@@ -174,7 +174,7 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 		// Setup the timer for terminating the process if SECONDS_PER_SLOT (12s in
 		// the Mainnet configuration) have passed since the point in time identified
 		// by the timestamp parameter.
-		endTimer := time.NewTimer(time.Second * 12)
+		endTimer := time.NewTimer(time.Second * 12) // daewooTODO: 12s内可以生成多次block，并取最高fee的block
 
 		for {
 			select {

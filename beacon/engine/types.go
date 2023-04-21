@@ -124,9 +124,9 @@ type ForkChoiceResponse struct {
 }
 
 type ForkchoiceStateV1 struct {
-	HeadBlockHash      common.Hash `json:"headBlockHash"`
-	SafeBlockHash      common.Hash `json:"safeBlockHash"`
-	FinalizedBlockHash common.Hash `json:"finalizedBlockHash"`
+	HeadBlockHash      common.Hash `json:"headBlockHash"`      // daewoo: 链上最新块
+	SafeBlockHash      common.Hash `json:"safeBlockHash"`      // daewooTODO: 需要确定这个SafeBlock的条件，是落后一个epoch，还是得票率超过50%的区块（当前认为是落后一个epoch)
+	FinalizedBlockHash common.Hash `json:"finalizedBlockHash"` // daewooTODO: 需要确定是落后两个epoch，还是通过得票率计算（当前认为是落后两个epoch）
 }
 
 func encodeTransactions(txs []*types.Transaction) [][]byte {

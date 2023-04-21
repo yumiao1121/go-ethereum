@@ -97,8 +97,8 @@ type ConsensusAPI struct {
 	// to track historical bad blocks as well as bad tipsets in case a chain
 	// is constantly built on it.
 	//
-	// There are a few important caveats in this mechanism:
-	//   - The bad block tracking is ephemeral, in-memory only. We must never
+	// There are a few important caveats（daewoo: 警告） in this mechanism:
+	//   - The bad block tracking is ephemeral（daewoo: 短暂的）, in-memory only. We must never
 	//     persist any bad block information to disk as a bug in Geth could end
 	//     up blocking a valid chain, even if a later Geth update would accept
 	//     it.
@@ -164,7 +164,7 @@ func NewConsensusAPI(eth *eth.Ethereum) *ConsensusAPI {
 // and return its payloadID.
 func (api *ConsensusAPI) ForkchoiceUpdatedV1(update engine.ForkchoiceStateV1, payloadAttributes *engine.PayloadAttributes) (engine.ForkChoiceResponse, error) {
 	if payloadAttributes != nil {
-		if payloadAttributes.Withdrawals != nil {
+		if payloadAttributes.Withdrawals != nil { // daewoo: 最初不支持验证者退出
 			return engine.STATUS_INVALID, engine.InvalidParams.With(fmt.Errorf("withdrawals not supported in V1"))
 		}
 		if api.eth.BlockChain().Config().IsShanghai(payloadAttributes.Timestamp) {
@@ -185,20 +185,21 @@ func (api *ConsensusAPI) ForkchoiceUpdatedV2(update engine.ForkchoiceStateV1, pa
 }
 
 func (api *ConsensusAPI) verifyPayloadAttributes(attr *engine.PayloadAttributes) error {
-	if !api.eth.BlockChain().Config().IsShanghai(attr.Timestamp) {
+	if !api.eth.BlockChain().Config().IsShanghai(attr.Timestamp) { // daewoo: 没有进入shanghai分叉之前不允许提款
 		// Reject payload attributes with withdrawals before shanghai
 		if attr.Withdrawals != nil {
 			return errors.New("withdrawals before shanghai")
 		}
 	} else {
 		// Reject payload attributes with nil withdrawals after shanghai
-		if attr.Withdrawals == nil {
+		if attr.Withdrawals == nil { // daewoo: 进入shanghai分叉后不能够为空
 			return errors.New("missing withdrawals list")
 		}
 	}
 	return nil
 }
 
+// daewoo: forkchoice协议选择合法链进行区块生成
 func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payloadAttributes *engine.PayloadAttributes) (engine.ForkChoiceResponse, error) {
 	api.forkchoiceLock.Lock()
 	defer api.forkchoiceLock.Unlock()
@@ -216,9 +217,13 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 	// Check whether we have the block yet in our database or not. If not, we'll
 	// need to either trigger a sync, or to reject this forkchoice update for a
 	// reason.
-	block := api.eth.BlockChain().GetBlockByHash(update.HeadBlockHash)
+	block := api.eth.BlockChain().GetBlockByHash(update.HeadBlockHash) // daewoo: 基于链头区块构建，需要判断是否存在该区块
+	// daewoo: block不存在需要判断是否为bad block，非bad block下需要进行同步（注意从finaliseBlock开始同步）
 	if block == nil {
 		// If this block was previously invalidated, keep rejecting it here too
+		/* daewoo: 如果update.HeadBlockHash没有记录在invalidTipsets, 或者记录次数超过了阈值会返回空（按照前面提到的设计思想
+		会再次给机会），如果记录在invalidTipsets且没有达到阈值会构建错误信息返回，如果check和head不一致会保存head到invalidTipsets中
+		*/
 		if res := api.checkInvalidAncestor(update.HeadBlockHash, update.HeadBlockHash); res != nil {
 			return engine.ForkChoiceResponse{PayloadStatus: *res, PayloadID: nil}, nil
 		}
@@ -226,7 +231,7 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		// we cannot resolve the header, so not much to do. This could be extended in
 		// the future to resolve from the `eth` network, but it's an unexpected case
 		// that should be fixed, not papered over.
-		header := api.remoteBlocks.get(update.HeadBlockHash)
+		header := api.remoteBlocks.get(update.HeadBlockHash) // daewoo: 没有从其节点接收过该区块
 		if header == nil {
 			log.Warn("Forkchoice requested unknown head", "hash", update.HeadBlockHash)
 			return engine.STATUS_SYNCING, nil
@@ -238,13 +243,14 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		// Header advertised via a past newPayload request. Start syncing to it.
 		// Before we do however, make sure any legacy sync in switched off so we
 		// don't accidentally have 2 cycles running.
-		if merger := api.eth.Merger(); !merger.TDDReached() {
-			merger.ReachTTD()
+		// daewoo: 进行数据同步，注意避免多个同步任务同时进行
+		if merger := api.eth.Merger(); !merger.TDDReached() { // daewoo: false表示还没有进入POS阶段
+			merger.ReachTTD() // daewoo: 第一次接收共识层消息
 			api.eth.Downloader().Cancel()
 		}
 		context := []interface{}{"number", header.Number, "hash", header.Hash()}
 		if update.FinalizedBlockHash != (common.Hash{}) {
-			if finalized == nil {
+			if finalized == nil { // daewoo: 还没有经过两个epoch
 				context = append(context, []interface{}{"finalized", "unknown"}...)
 			} else {
 				context = append(context, []interface{}{"finalized", finalized.Number}...)
@@ -256,9 +262,9 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		}
 		return engine.STATUS_SYNCING, nil
 	}
-	// Block is known locally, just sanity check that the beacon client does not
+	// Block is known locally, just sanity（daewoo: 健壮性） check that the beacon client does not
 	// attempt to push us back to before the merge.
-	if block.Difficulty().BitLen() > 0 || block.NumberU64() == 0 {
+	if block.Difficulty().BitLen() > 0 || block.NumberU64() == 0 { // daewoo: 存在block是POW块，但是新生成的区块是POS块的情况，因此需要验证TD
 		var (
 			td  = api.eth.BlockChain().GetTd(update.HeadBlockHash, block.NumberU64())
 			ptd = api.eth.BlockChain().GetTd(block.ParentHash(), block.NumberU64()-1)
@@ -268,7 +274,7 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 			log.Error("TDs unavailable for TTD check", "number", block.NumberU64(), "hash", update.HeadBlockHash, "td", td, "parent", block.ParentHash(), "ptd", ptd)
 			return engine.STATUS_INVALID, errors.New("TDs unavailable for TDD check")
 		}
-		if td.Cmp(ttd) < 0 {
+		if td.Cmp(ttd) < 0 { // daewoo: 没有到触发共识升级
 			log.Error("Refusing beacon update to pre-merge", "number", block.NumberU64(), "hash", update.HeadBlockHash, "diff", block.Difficulty(), "age", common.PrettyAge(time.Unix(int64(block.Time()), 0)))
 			return engine.ForkChoiceResponse{PayloadStatus: engine.INVALID_TERMINAL_BLOCK, PayloadID: nil}, nil
 		}
@@ -283,16 +289,17 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 			PayloadID:     id,
 		}
 	}
-	if rawdb.ReadCanonicalHash(api.eth.ChainDb(), block.NumberU64()) != update.HeadBlockHash {
+	if rawdb.ReadCanonicalHash(api.eth.ChainDb(), block.NumberU64()) != update.HeadBlockHash { // daewoo: 在本地合法链指定高度的blockHash != 传入的hash
 		// Block is not canonical, set head.
-		if latestValid, err := api.eth.BlockChain().SetCanonical(block); err != nil {
+		//	daewoo:	这里不需要链重组条件的判断吗
+		if latestValid, err := api.eth.BlockChain().SetCanonical(block); err != nil { // daewoo: 进行重组判断
 			return engine.ForkChoiceResponse{PayloadStatus: engine.PayloadStatusV1{Status: engine.INVALID, LatestValidHash: &latestValid}}, err
 		}
 	} else if api.eth.BlockChain().CurrentBlock().Hash() == update.HeadBlockHash {
 		// If the specified head matches with our local head, do nothing and keep
 		// generating the payload. It's a special corner case that a few slots are
 		// missing and we are requested to generate the payload in slot.
-	} else {
+	} else { // daewoo: 如果改headHash本地存在，且不是链头，则忽略
 		// If the head block is already in our canonical chain, the beacon client is
 		// probably resyncing. Ignore the update.
 		log.Info("Ignoring beacon update to old head", "number", block.NumberU64(), "hash", update.HeadBlockHash, "age", common.PrettyAge(time.Unix(int64(block.Time()), 0)), "have", api.eth.BlockChain().CurrentBlock().Number)
@@ -302,9 +309,9 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 
 	// If the beacon client also advertised a finalized block, mark the local
 	// chain final and completely in PoS mode.
-	if update.FinalizedBlockHash != (common.Hash{}) {
+	if update.FinalizedBlockHash != (common.Hash{}) { // daewoo: 表示当前是从三个epoch开始， daewooTODO: 是否当前都会带有FinalizedBlockHash， 还是只有epoch第一个块会携带
 		if merger := api.eth.Merger(); !merger.PoSFinalized() {
-			merger.FinalizePoS()
+			merger.FinalizePoS() // daewoo: 完全切换到POS
 		}
 		// If the finalized block is not in our canonical tree, somethings wrong
 		finalBlock := api.eth.BlockChain().GetBlockByHash(update.FinalizedBlockHash)
@@ -316,7 +323,7 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 			return engine.STATUS_INVALID, engine.InvalidForkChoiceState.With(errors.New("final block not in canonical chain"))
 		}
 		// Set the finalized block
-		api.eth.BlockChain().SetFinalized(finalBlock.Header())
+		api.eth.BlockChain().SetFinalized(finalBlock.Header()) // daewoo: 更新finalizedBlock（这个表示对区块的commit，可以认为是全网唯一的）
 	}
 	// Check if the safe block hash is in our canonical tree, if not somethings wrong
 	if update.SafeBlockHash != (common.Hash{}) {
@@ -343,13 +350,13 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 			Random:       payloadAttributes.Random,
 			Withdrawals:  payloadAttributes.Withdrawals,
 		}
-		id := args.Id()
+		id := args.Id() // daewoo: 根据BuildPayloadArgs生成
 		// If we already are busy generating this work, then we do not need
 		// to start a second process.
-		if api.localBlocks.has(id) {
+		if api.localBlocks.has(id) { // daewoo: 去重
 			return valid(&id), nil
 		}
-		payload, err := api.eth.Miner().BuildPayload(args)
+		payload, err := api.eth.Miner().BuildPayload(args) // daewoo: payload中有的cond锁，在更新fee更高的block时会更新
 		if err != nil {
 			log.Error("Failed to build payload", "err", err)
 			return valid(nil), engine.InvalidPayloadAttributes.With(err)
@@ -586,12 +593,13 @@ func (api *ConsensusAPI) setInvalidAncestor(invalid *types.Header, origin *types
 
 // checkInvalidAncestor checks whether the specified chain end links to a known
 // bad ancestor. If yes, it constructs the payload failure response to return.
+// daewoo: 用于判断当前的head是否是从一个标记为bad block上分叉出来的， check表示要检查是否为bad ancestor
 func (api *ConsensusAPI) checkInvalidAncestor(check common.Hash, head common.Hash) *engine.PayloadStatusV1 {
 	api.invalidLock.Lock()
 	defer api.invalidLock.Unlock()
 
 	// If the hash to check is unknown, return valid
-	invalid, ok := api.invalidTipsets[check]
+	invalid, ok := api.invalidTipsets[check] // daewoo: 表示该check没有在记录的bad ancestor中
 	if !ok {
 		return nil
 	}
@@ -620,12 +628,12 @@ func (api *ConsensusAPI) checkInvalidAncestor(check common.Hash, head common.Has
 				break
 			}
 		}
-		api.invalidTipsets[head] = invalid
+		api.invalidTipsets[head] = invalid // daewoo: 当前head挂接在bad ancestor，标记head为bad
 	}
 	// If the last valid hash is the terminal pow block, return 0x0 for latest valid hash
 	lastValid := &invalid.ParentHash
 	if header := api.eth.BlockChain().GetHeader(invalid.ParentHash, invalid.Number.Uint64()-1); header != nil && header.Difficulty.Sign() != 0 {
-		lastValid = &common.Hash{}
+		lastValid = &common.Hash{} // daewoo: 如果上个区块是POW，用0x0标记
 	}
 	failure := "links to previously rejected block"
 	return &engine.PayloadStatusV1{

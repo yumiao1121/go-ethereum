@@ -176,7 +176,7 @@ type Block struct {
 	header       *Header
 	uncles       []*Header
 	transactions Transactions
-	withdrawals  Withdrawals
+	withdrawals  Withdrawals // daewoo: 用于共识层验证者的退出
 
 	// caches
 	hash atomic.Value

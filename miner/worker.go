@@ -1219,18 +1219,18 @@ func (w *worker) getSealingBlock(parent common.Hash, timestamp uint64, coinbase 
 	req := &getWorkReq{
 		params: &generateParams{
 			timestamp:   timestamp,
-			forceTime:   true,
+			forceTime:   true, // daewoo: 默认要求强制使用传入的时间戳
 			parentHash:  parent,
 			coinbase:    coinbase,
 			random:      random,
 			withdrawals: withdrawals,
-			noUncle:     true,
+			noUncle:     true, // daewoo: 默认不包含叔块
 			noTxs:       noTxs,
 		},
 		result: make(chan *newPayloadResult, 1),
 	}
 	select {
-	case w.getWorkCh <- req:
+	case w.getWorkCh <- req: // daewoo: req中包含一个result chan用于堵塞接收结果，这是同步的写法
 		result := <-req.result
 		if result.err != nil {
 			return nil, nil, result.err

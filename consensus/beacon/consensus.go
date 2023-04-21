@@ -356,7 +356,7 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 	if !beacon.IsPoSHeader(header) {
 		return beacon.ethone.FinalizeAndAssemble(chain, header, state, txs, uncles, receipts, nil)
 	}
-	shanghai := chain.Config().IsShanghai(header.Time)
+	shanghai := chain.Config().IsShanghai(header.Time) // daewoo: shanghai分叉
 	if shanghai {
 		// All blocks after Shanghai must include a withdrawals root.
 		if withdrawals == nil {
@@ -368,10 +368,10 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 		}
 	}
 	// Finalize and assemble the block.
-	beacon.Finalize(chain, header, state, txs, uncles, withdrawals)
+	beacon.Finalize(chain, header, state, txs, uncles, withdrawals) // daewoo: 基于withdrawals更新state
 
 	// Assign the final state root to header.
-	header.Root = state.IntermediateRoot(true)
+	header.Root = state.IntermediateRoot(true)	
 
 	// Assemble and return the final block.
 	return types.NewBlockWithWithdrawals(header, txs, uncles, receipts, withdrawals, trie.NewStackTrie(nil)), nil

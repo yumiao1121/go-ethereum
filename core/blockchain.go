@@ -2264,7 +2264,7 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	}
 	// Run the reorg if necessary and set the given block as new head.
 	start := time.Now()
-	if head.ParentHash() != bc.CurrentBlock().Hash() {
+	if head.ParentHash() != bc.CurrentBlock().Hash() { // daewoo: 只有一种情况不需要重组，就是新收到的head是接着合法链往下走
 		if err := bc.reorg(bc.CurrentBlock(), head); err != nil {
 			return common.Hash{}, err
 		}
@@ -2277,7 +2277,7 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	if len(logs) > 0 {
 		bc.logsFeed.Send(logs)
 	}
-	bc.chainHeadFeed.Send(ChainHeadEvent{Block: head})
+	bc.chainHeadFeed.Send(ChainHeadEvent{Block: head}) // daewoo: 原本resultChan中的新区块头广播收敛到这个
 
 	context := []interface{}{
 		"number", head.Number(),
